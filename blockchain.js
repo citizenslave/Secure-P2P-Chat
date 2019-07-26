@@ -51,6 +51,7 @@ class Mailbox {
 	loadMailbox(privateKey) {
 		this.privateKey = privateKey;
 		this.publicKey = ENCRYPTION.derivePublicKey(privateKey, this.passphrase);
+		this.getConfig();
 	}
 
 	sendMessage(toKey, payload, isDataBlock = true) {
@@ -249,6 +250,7 @@ rl.on('line', input => {
 });
 rl.on('close', input => {
 	CommandProcessor.processCommand('/chain dump chain');
+	CommandProcessor.processCommand('/peer --dcAll');
 	console.log('Exiting...');
 	process.exit(0);
 });
@@ -267,7 +269,7 @@ class CommandProcessor {
 			CommandProcessor.selectMailbox(parsedCommand._);
 			break;
 		case '/savekey':
-			CommandProcessor.saveKey(parsedCommand._);
+			CommandProcessor.saveKey(parsedCommand._, parsedCommand);
 			break;
 		case '/alias':
 			CommandProcessor.createAlias(parsedCommand._, parsedCommand);
@@ -275,11 +277,11 @@ class CommandProcessor {
 		case '/chain':
 			CommandProcessor.chainCommands(parsedCommand._);
 			break;
-		case '/read':
-			CommandProcessor.readMessages();
-			break;
 		case '/peer':
 			CommandProcessor.connectPeer(parsedCommand._, parsedCommand);
+			break;
+		case '/read':
+			CommandProcessor.readMessages();
 			break;
 		case '/send':
 			CommandProcessor.sendMode(parsedCommand._);
@@ -298,61 +300,11 @@ class CommandProcessor {
 		}
 	}
 
-	static readMessages() {
-		if (!CommandProcessor.activeMailboxKey) {
-			console.log('No mailbox active');
-			return;
-		}
-		let msgs = CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].getMessages();
-		msgs.forEach(msg => {
-			console.log(msg);
-		});
-	}
-
-	static sendMode(parsedCommand) {
-		if (!CommandProcessor.activeMailboxKey) {
-			console.log('No mailbox active');
-			return;
-		}
-		if (!parsedCommand[1]) {
-			console.log('No delivery mailbox specified');
-			return;
-		}
-		if (CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].aliases[parsedCommand[1]]) {
-			console.log(`Sending to alias "${parsedCommand[1]}":`);
-			console.log(CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].aliases[parsedCommand[1]].publicKey);
-			CommandProcessor.sendTo = {
-				'alias': parsedCommand[1],
-				'key': CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].aliases[parsedCommand[1]].publicKey
-			};
-			return;
-		} else {
-			console.log(`No alias "${parsedCommand[1]}" found in current mailbox.  Using as public key`);
-			CommandProcessor.sendTo = {
-				'alias': null,
-				'key': parsedCommand[1]
-			};
-			return;
-		}
-	}
-
-	static send(text) {
-		if (!CommandProcessor.activeMailboxKey) {
-			console.log('No mailbox active');
-			return;
-		}
-		CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].sendMessage(
-				CommandProcessor.sendTo.key, text);
-	}
-
-	static disconnectSend() {
-		if (!CommandProcessor.sendTo) return;
-
-		console.log(`---Disconnected ${CommandProcessor.sendTo.alias?`from "${CommandProcessor.sendTo.alias}"`:''}---`);
-		CommandProcessor.sendTo = null;
-	}
-
 	static selectMailbox(parsedCommand) {
+		if (!parsedCommand[1] && CommandProcessor.activeMailboxKey) {
+			console.log(`Connected to mailbox ${CommandProcessor.activeMailboxKey}`);
+			return;
+		}
 		CommandProcessor.disconnectSend();
 		if (parsedCommand[1] && this.mailboxes[parsedCommand[1]]) {
 			CommandProcessor.activeMailboxKey = parsedCommand[1];
@@ -378,10 +330,9 @@ class CommandProcessor {
 		}
 		CommandProcessor.mailboxes[parsedCommand[1]] = new Mailbox(parsedCommand[2], privateKey, CommandProcessor.blockchain);
 		CommandProcessor.activeMailboxKey = parsedCommand[1];
-		CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].getConfig();
 	}
 
-	static saveKey(parsedCommand) {
+	static saveKey(parsedCommand, flags) {
 		if (!CommandProcessor.activeMailboxKey) {
 			console.log('No mailbox active');
 			return;
@@ -398,7 +349,11 @@ class CommandProcessor {
 			console.log('No destination file specified');
 			return;
 		}
-		if (fs.existsSync(parsedCommand[2])) {
+		if (flags.show) {
+			console.log(`Show ${parsedCommand[1]} key for mailbox ${CommandProcessor.activeMailboxKey}:`);
+			console.log(CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey][parsedCommand[1] === 'private'?'privateKey':'publicKey']);
+		}
+		if (fs.existsSync(parsedCommand[2]), flags.overwrite) {
 			console.log(`Destination file "${parsedCommand[2]}" already exists`);
 			return; 
 		} else {
@@ -465,7 +420,7 @@ class CommandProcessor {
 			return;
 		} else if (parsedCommand[1] === 'dump') {
 			fs.writeFileSync(parsedCommand[2], CommandProcessor.blockchain.toString());
-			console.log(`Dumped chain to ${parsedCommand[2]}`);
+			console.log(`Dumped blockchain to ${parsedCommand[2]}`);
 			return;
 		} else if (parsedCommand[1] === 'broadcast') {
 			Object.values(CommandProcessor.peerSockets).forEach(socket => {
@@ -532,6 +487,12 @@ class CommandProcessor {
 			console.log('No peer host identified');
 			return;
 		}
+		if (flags.dc && CommandProcessor.peerSockets[parsedCommand[1]]) {
+			if (!CommandProcessor.peerSockets[parsedCommand[1]].destroyed)
+				CommandProcessor.peerSockets[parsedCommand[1]].end()
+			delete CommandProcessor.peerSockets[parsedCommand[1]];
+			return;
+		}
 		if (parsedCommand[2] === 'send' && CommandProcessor.peerSockets[parsedCommand[1]]) {
 			console.log(`Sending: ${parsedCommand.slice(3).join(' ')}`);
 			CommandProcessor.peerSockets[parsedCommand[1]].write(JSON.stringify(parsedCommand.slice(3).join(' ')));
@@ -552,6 +513,60 @@ class CommandProcessor {
 			socket.on('error', errorHandler(parsedCommand[1]));
 			socket.on('data', dataHandler(parsedCommand[1]));
 		});
+	}
+
+	static readMessages() {
+		if (!CommandProcessor.activeMailboxKey) {
+			console.log('No mailbox active');
+			return;
+		}
+		let msgs = CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].getMessages();
+		msgs.forEach(msg => {
+			console.log(msg);
+		});
+	}
+
+	static sendMode(parsedCommand) {
+		if (!CommandProcessor.activeMailboxKey) {
+			console.log('No mailbox active');
+			return;
+		}
+		if (!parsedCommand[1]) {
+			console.log('No delivery mailbox specified');
+			return;
+		}
+		if (CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].aliases[parsedCommand[1]]) {
+			console.log(`Sending to alias "${parsedCommand[1]}":`);
+			console.log(CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].aliases[parsedCommand[1]].publicKey);
+			CommandProcessor.sendTo = {
+				'alias': parsedCommand[1],
+				'key': CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].aliases[parsedCommand[1]].publicKey
+			};
+			return;
+		} else {
+			console.log(`No alias "${parsedCommand[1]}" found in current mailbox.  Using as public key`);
+			CommandProcessor.sendTo = {
+				'alias': null,
+				'key': parsedCommand[1]
+			};
+			return;
+		}
+	}
+
+	static send(text) {
+		if (!CommandProcessor.activeMailboxKey) {
+			console.log('No mailbox active');
+			return;
+		}
+		CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].sendMessage(
+				CommandProcessor.sendTo.key, text);
+	}
+
+	static disconnectSend() {
+		if (!CommandProcessor.sendTo) return;
+
+		console.log(`---Disconnected ${CommandProcessor.sendTo.alias?`from "${CommandProcessor.sendTo.alias}"`:''}---`);
+		CommandProcessor.sendTo = null;
 	}
 }
 
