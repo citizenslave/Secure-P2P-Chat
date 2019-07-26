@@ -76,8 +76,6 @@ class Mailbox {
 		if (!transaction) return;
 		if (!transaction.verifyTransaction())
 			return console.warn(`Unverified message from\n${Mailbox.formatKey(transaction.fromKey)}:\n${transaction.payload}`);
-		// console.log(`Verified message from\n${Mailbox.formatKey(transaction.fromKey)}\nto\n${Mailbox.formatKey(this.publicKey)}:`);
-		// console.log(inspect(transaction.payload, false, null, true));
 		let encryptedPayload = transaction.payload;
 		let decryptedCipher = JSON.parse(ENCRYPTION.rsaDecrypt(this.privateKey, this.passphrase, encryptedPayload.cipher));
 		decryptedCipher['body'] = {
@@ -89,7 +87,6 @@ class Mailbox {
 
 	getMessages() {
 		let msgs = this.blockchain.getBlocksFor(this.publicKey).map(this.recvMessage.bind(this));
-		// console.log(msgs);
 		return msgs;
 	}
 
@@ -110,14 +107,6 @@ class Mailbox {
 				console.log(`Unknown config type: ${config.type}\n(${config})`);
 			}
 		});
-	}
-
-	reloadBlockChain(bcData) {
-		let bcUpdate = BlockChain.parse(bcData, Mailbox.parse);
-		if (!bcUpdate) return;
-		if (bcUpdate.chain.length > this.blockchain.chain.length) this.blockchain = bcUpdate;
-		this.getConfig();
-		console.log('Mailbox blockchain updated');
 	}
 
 	static parse(txData) {
@@ -290,7 +279,7 @@ class CommandProcessor {
 			CommandProcessor.readMessages();
 			break;
 		case '/peer':
-			CommandProcessor.connectPeer(parsedCommand._);
+			CommandProcessor.connectPeer(parsedCommand._, parsedCommand);
 			break;
 		case '/send':
 			CommandProcessor.sendMode(parsedCommand._);
@@ -452,7 +441,6 @@ class CommandProcessor {
 			'publicKey': publicKey,
 			'timestamp': Date.now()
 		};
-		console.log(aliasConfig);
 		CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey]
 				.sendMessage(CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].publicKey, aliasConfig, false);
 		console.log(`Alias created for "${parsedCommand[1]}":\n${publicKey}`);
@@ -510,7 +498,7 @@ class CommandProcessor {
 			console.log(`Blockchain updated`);
 			return;
 		} else if (!bc.isValid()) {
-			console.log(`Blockchain data is invalid`);
+			console.log(`Blockchain is invalid`);
 			return;
 		} else {
 			console.log(`Potential fork`);
@@ -521,7 +509,25 @@ class CommandProcessor {
 		}
 	}
 
-	static connectPeer(parsedCommand) {
+	static connectPeer(parsedCommand, flags) {
+		if (flags.dcAll) {
+			Object.keys(CommandProcessor.peerSockets).forEach(socketAddr => {
+				if (!CommandProcessor.peerSockets[socketAddr].destroyed)
+					CommandProcessor.peerSockets[socketAddr].end();
+				delete CommandProcessor.peerSockets[socketAddr];
+			});
+			return;
+		}
+		if (flags.list) {
+			Object.keys(CommandProcessor.peerSockets).forEach(socketAddr => {
+				console.log(`${socketAddr}\t\t${CommandProcessor.peerSockets[socketAddr].destroyed?'DESTROYED':'OPEN'}`);
+			});
+			return;
+		}
+		if (flags.me) {
+			console.log(`localhost:${server.address().port}`);
+			return;
+		}
 		if (!parsedCommand[1]) {
 			console.log('No peer host identified');
 			return;
@@ -531,6 +537,7 @@ class CommandProcessor {
 			CommandProcessor.peerSockets[parsedCommand[1]].write(JSON.stringify(parsedCommand.slice(3).join(' ')));
 			return;
 		}
+
 		const host = parsedCommand[1].split(':');
 		if (host.length !== 2 || !Number(host[1])) {
 			console.log(`Invalid host ${parsedCommand} provided`);
@@ -539,10 +546,11 @@ class CommandProcessor {
 		const socket = CommandProcessor.peerSockets[parsedCommand[1]] = net.connect(host[1], host[0], () => {
 			console.log(`Socket connected to ${parsedCommand[1]}`);
 			socket.setNoDelay(true);
+			socket.on('end', () => {
+				console.log(`${parsedCommand[1]} disconnected`);
+			})
+			socket.on('error', errorHandler(parsedCommand[1]));
 			socket.on('data', dataHandler(parsedCommand[1]));
-			socket.on('error', e => {
-				console.log('socket:', e);
-			});
 		});
 	}
 }
@@ -565,6 +573,16 @@ function dataHandler(socketInfo) {
 	}
 }
 
+function errorHandler(socketInfo) {
+	return (error) => {
+		if (error.errno === 'ECONNRESET') {
+			console.log(`${socketInfo}> ${error.errno}`);
+		} else {
+			console.log(`${socketInfo}>\n`, error);
+		}
+	}
+}
+
 const server = net.createServer(socket => {
 	let connectedHost = `${socket.remoteAddress.replace(/^.*:/, '')
 			.replace('127.0.0.1', 'localhost')}:${socket.remotePort}`;
@@ -572,31 +590,13 @@ const server = net.createServer(socket => {
 	CommandProcessor.peerSockets[connectedHost] = socket;
 	socket.setNoDelay(true);
 	socket.on('end', () => {
-		console.log('client disconnected');
+		console.log(`${connectedHost} disconnected`);
 	});
-	socket.on('error', e => {
-		console.log('socket:', e);
-	})
-	socket.write('"connected":::END_CHAIN:::');
+	socket.on('error', errorHandler(connectedHost));
 	socket.on('data', dataHandler(connectedHost));
 });
 server.listen(() => {
-	console.log('listening...');
-	console.log(server.address());
+	console.log('Listening for peers on:');
+	console.log(`localhost:${server.address().port}`);
 });
-server.on('error', (e) => {
-	console.log('server:', e);
-});
-// let bc1 = new BlockChain();
-// let bc2 = new BlockChain();
-// let testMailbox1 = new Mailbox('test', '', bc1);
-// let testMailbox2 = new Mailbox('test', '', bc2);
-// setTimeout(() => {
-// 	testMailbox1.sendMessage(testMailbox2.publicKey, 'test');
-// 	testMailbox1.sendMessage(testMailbox1.publicKey, {'type':'alias','alias':'me'});
-// 	console.log(testMailbox1.getMessages());
-// 	testMailbox2.reloadBlockChain(bc1.toString());
-// 	console.log(testMailbox2.getMessages());
-// 	testMailbox1.getConfig();
-// 	console.log(testMailbox1.aliases);
-// }, 5000);
+server.on('error', errorHandler(`localhost:${server.address().port}`));
