@@ -353,7 +353,7 @@ class CommandProcessor {
 			console.log(`Show ${parsedCommand[1]} key for mailbox ${CommandProcessor.activeMailboxKey}:`);
 			console.log(CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey][parsedCommand[1] === 'private'?'privateKey':'publicKey']);
 		}
-		if (fs.existsSync(parsedCommand[2]), flags.overwrite) {
+		if (fs.existsSync(parsedCommand[2]), !flags.overwrite) {
 			console.log(`Destination file "${parsedCommand[2]}" already exists`);
 			return; 
 		} else {
