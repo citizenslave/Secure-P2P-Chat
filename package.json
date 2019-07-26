@@ -1,0 +1,22 @@
+{
+  "name": "secure-p2p-chat",
+  "version": "0.0.1",
+  "description": "Secure P2P blockchain based chat application",
+  "main": "blockchain.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/citizenslave/Secure-P2P-Chat.git"
+  },
+  "author": "Will McVay",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/citizenslave/Secure-P2P-Chat/issues"
+  },
+  "homepage": "https://github.com/citizenslave/Secure-P2P-Chat#readme",
+  "dependencies": {
+    "yargs": "^13.3.0"
+  }
+}
