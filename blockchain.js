@@ -226,6 +226,18 @@ class BlockChain {
 		return this.chain.filter(block => (block.data.toKey === publicKey) && (!block.isDataBlock)).map(block => block.data);
 	}
 
+	static resolveFork(oldBc, newBc) {
+		let lastCommonBlockIndex = 0;
+		for (let i=0; i<newBc.chain.length; i++) {
+			if (newBc.chain[i].toString() === oldBc.chain[i].toString()) lastCommonBlockIndex = i;
+		}
+		if (lastCommonBlockIndex === newBc.chain.length - 1) return false;
+		for (let i=lastCommonBlockIndex+1; i<newBc.chain.length; i++) {
+			oldBc.addBlock(newBc.chain[i].data, newBc.chain[i].isDataBlock);
+		}
+		return true;
+	}
+
 	static parse(bcString, dataParser) {
 		let bcData = JSON.parse(bcString);
 		bcData.chain = JSON.parse(bcData.chain);
@@ -448,19 +460,15 @@ class CommandProcessor {
 	}
 
 	static chainCommands(parsedCommand) {
-		// if (!CommandProcessor.activeMailboxKey) {
-		// 	console.log('No active mailbox');
-		// 	return;
-		// }
 		if (!parsedCommand[1]) {
 			console.log('No chain command issued');
 			return;
 		}
-		if (![ 'dump', 'load', 'broadcast' ].includes(parsedCommand[1])) {
+		if (![ 'dump', 'load', 'broadcast', 'display' ].includes(parsedCommand[1])) {
 			console.log(`Invalid chain command ${parsedCommand[1]}`);
 			return;
 		}
-		if (!parsedCommand[2] && parsedCommand[1] !== 'broadcast') {
+		if (!parsedCommand[2] && ![ 'broadcast', 'display' ].includes(parsedCommand[1])) {
 			console.log(`No filename provided for chain ${parsedCommand[1]} command`);
 			return;
 		}
@@ -471,15 +479,17 @@ class CommandProcessor {
 			fs.writeFileSync(parsedCommand[2], CommandProcessor.blockchain.toString());
 			console.log(`Dumped chain to ${parsedCommand[2]}`);
 			return;
-		} else {
-			console.log(CommandProcessor.blockchain.toString());
+		} else if (parsedCommand[1] === 'broadcast') {
 			Object.values(CommandProcessor.peerSockets).forEach(socket => {
+				if (socket.destroyed) return;
 				socket.write(JSON.stringify({
 					'type': 'blockchain',
 					'payload': CommandProcessor.blockchain.toString()
 				}));
 				socket.write(':::END_CHAIN:::');
 			});
+		} else {
+			console.log(inspect(CommandProcessor.blockchain, false, null, true));
 		}
 	}
 
@@ -499,9 +509,15 @@ class CommandProcessor {
 			Object.values(CommandProcessor.mailboxes).forEach(mailbox => mailbox.blockchain = CommandProcessor.blockchain);
 			console.log(`Blockchain updated`);
 			return;
-		} else {
-			console.log(`Blockchain data is invalid or stale`);
+		} else if (!bc.isValid()) {
+			console.log(`Blockchain data is invalid`);
 			return;
+		} else {
+			console.log(`Potential fork`);
+			if (BlockChain.resolveFork(CommandProcessor.blockchain, bc))
+				console.log('Fork resolved');
+			else
+				console.log('Stale chain ignored');
 		}
 	}
 
@@ -537,16 +553,15 @@ if (!CommandProcessor.blockchain) CommandProcessor.blockchain = new BlockChain()
 function dataHandler(socketInfo) {
 	let chainData = '';
 	return (data) => {
-		// console.log(data.toString());
 		if (!data.toString().includes(':::END_CHAIN:::')) return chainData += data.toString();
 		let last = data.toString();
 		chainData += last.substr(0, last.length-15);
-		console.log(chainData);
 		let payload = JSON.parse(chainData);
 		chainData = '';
-		console.log(`${socketInfo}> ${inspect(payload, false, null, true)}`);
 		if (payload.type === 'blockchain')
 			CommandProcessor.updateBlockChain(payload.payload);
+		else
+			console.log(`${socketInfo}> ${inspect(payload, false, null, true)}`);
 	}
 }
 
