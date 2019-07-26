@@ -82,7 +82,7 @@ When in doubt, broadcast the chain.  I think I fixed the forking issue, but more
 ## TODO
 * Fix the forking issue - Fixed?
 * Automate broadcasting
-* Test with more than two peers
-    * Peer discovery/chain relay
+* Test with more than two peers - Done
+    * Peer discovery/chain relay - Done?
 * Expose peers to web connections
 * Unknown unknowns

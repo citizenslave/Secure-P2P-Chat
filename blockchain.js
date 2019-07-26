@@ -429,7 +429,7 @@ class CommandProcessor {
 					'type': 'blockchain',
 					'payload': CommandProcessor.blockchain.toString()
 				}));
-				socket.write(':::END_CHAIN:::');
+				socket.write(':::END_MSG:::');
 			});
 		} else {
 			console.log(inspect(CommandProcessor.blockchain, false, null, true));
@@ -504,8 +504,20 @@ class CommandProcessor {
 			console.log(`Invalid host ${parsedCommand} provided`);
 			return;
 		}
+		if (host[0] === 'localhost' && Number(host[1]) === server.address().port) {
+			console.log('Abort self-connect');
+			return;
+		}
 		const socket = CommandProcessor.peerSockets[parsedCommand[1]] = net.connect(host[1], host[0], () => {
-			console.log(`Socket connected to ${parsedCommand[1]}`);
+			console.log(`Socket connected to ${parsedCommand[1]} (client)`);
+			let knownHosts = Object.keys(CommandProcessor.peerSockets)
+					.filter(socketItem => !CommandProcessor.peerSockets[socketItem].destroyed && CommandProcessor.peerSockets[socketItem] !== socket);
+			socket.write(JSON.stringify({
+				'type': 'knownHosts',
+				'hosts': knownHosts,
+				'me': `${localHostName()}:${server.address().port}`
+			}));
+			socket.write(':::END_MSG:::');
 			socket.setNoDelay(true);
 			socket.on('end', () => {
 				console.log(`${parsedCommand[1]} disconnected`);
@@ -576,16 +588,27 @@ if (!CommandProcessor.blockchain) CommandProcessor.blockchain = new BlockChain()
 function dataHandler(socketInfo) {
 	let chainData = '';
 	return (data) => {
-		if (!data.toString().includes(':::END_CHAIN:::')) return chainData += data.toString();
+		if (!data.toString().includes(':::END_MSG:::')) return chainData += data.toString();
 		let last = data.toString();
-		chainData += last.substr(0, last.length-15);
+		chainData += last.substr(0, last.length-13);
 		let payload = JSON.parse(chainData);
 		chainData = '';
 		if (payload.type === 'blockchain')
 			CommandProcessor.updateBlockChain(payload.payload);
-		else
+		else if (payload.type === 'knownHosts') {
+			if (payload.me && !CommandProcessor.peerSockets[payload.me]) {
+				CommandProcessor.peerSockets[payload.me] = CommandProcessor.peerSockets[socketInfo];
+				delete CommandProcessor.peerSockets[socketInfo];
+			}
+			payload.hosts.filter(host => !CommandProcessor.peerSockets[host] && host !== `${localHostName()}:${server.address().port}`)
+					.forEach(host => CommandProcessor.processCommand(`/peer ${host}`));
+		} else
 			console.log(`${socketInfo}> ${inspect(payload, false, null, true)}`);
 	}
+}
+
+function localHostName() {
+	return 'localhost';
 }
 
 function errorHandler(socketInfo) {
@@ -601,8 +624,15 @@ function errorHandler(socketInfo) {
 const server = net.createServer(socket => {
 	let connectedHost = `${socket.remoteAddress.replace(/^.*:/, '')
 			.replace('127.0.0.1', 'localhost')}:${socket.remotePort}`;
-	console.log(`Socket connected to ${connectedHost}`);
+	console.log(`Socket connected to ${connectedHost} (server)`);
 	CommandProcessor.peerSockets[connectedHost] = socket;
+	let knownHosts = Object.keys(CommandProcessor.peerSockets)
+			.filter(socketItem => !socketItem.destroyed && socketItem !== socket && socketItem !== connectedHost);
+	socket.write(JSON.stringify({
+		'type': 'knownHosts',
+		'hosts': knownHosts
+	}));
+	socket.write(':::END_MSG:::');
 	socket.setNoDelay(true);
 	socket.on('end', () => {
 		console.log(`${connectedHost} disconnected`);
