@@ -600,7 +600,7 @@ function dataHandler(socketInfo, socket) {
 			if (payload.me && !CommandProcessor.peerSockets[payload.me]) {
 				CommandProcessor.peerSockets[payload.me] = CommandProcessor.peerSockets[socketInfo];
 				delete CommandProcessor.peerSockets[socketInfo];
-			}console.log('knownHosts:', payload);
+			}
 			payload.hosts.filter(filterHosts(`${myIp()}:${server.address().port}`, socket, true))
 					.forEach(host => {CommandProcessor.processCommand(`/peer ${host}`)});
 		} else
@@ -632,16 +632,12 @@ function errorHandler(socketInfo) {
 
 function filterHosts(localHost, socket, create) {
 	return (remoteHost) => {
-		console.log(remoteHost);
 		const hostSocket = CommandProcessor.peerSockets[remoteHost];
 		if (hostSocket && !hostSocket.destroyed && create) return false;
-		console.log(remoteHost, 'socket exists and is healthy');
 		if (remoteHost === localHost) return false;
-		console.log(remoteHost, `is not ${localHost}`);
 		const remoteHostParts = remoteHost.split(':');
 		const localHostParts = localHost.split(':');
 		if (remoteHostParts[1] !== localHostParts[1]) return true;
-		console.log(remoteHost, 'ports match');
 		return !isLocalHost(remoteHostParts[0]);
 	}
 }
