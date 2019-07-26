@@ -4,6 +4,7 @@ const readline = require('readline');
 const yargs = require('yargs');
 const fs = require('fs');
 const net = require('net');
+const os = require('os');
 
 class Transaction {
 	toKey;
@@ -480,7 +481,7 @@ class CommandProcessor {
 			return;
 		}
 		if (flags.me) {
-			console.log(`localhost:${server.address().port}`);
+			console.log(`${myIp()}:${server.address().port}`);
 			return;
 		}
 		if (!parsedCommand[1]) {
@@ -511,11 +512,11 @@ class CommandProcessor {
 		const socket = CommandProcessor.peerSockets[parsedCommand[1]] = net.connect(host[1], host[0], () => {
 			console.log(`Socket connected to ${parsedCommand[1]} (client)`);
 			let knownHosts = Object.keys(CommandProcessor.peerSockets)
-					.filter(socketItem => !CommandProcessor.peerSockets[socketItem].destroyed && CommandProcessor.peerSockets[socketItem] !== socket);
+					.filter(filterHosts(`${myIp()}:${server.address().port}`, socket, false));
 			socket.write(JSON.stringify({
 				'type': 'knownHosts',
 				'hosts': knownHosts,
-				'me': `${localHostName()}:${server.address().port}`
+				'me': `${myIp()}:${server.address().port}`
 			}));
 			socket.write(':::END_MSG:::');
 			socket.setNoDelay(true);
@@ -523,7 +524,7 @@ class CommandProcessor {
 				console.log(`${parsedCommand[1]} disconnected`);
 			})
 			socket.on('error', errorHandler(parsedCommand[1]));
-			socket.on('data', dataHandler(parsedCommand[1]));
+			socket.on('data', dataHandler(parsedCommand[1], socket));
 		});
 	}
 
@@ -585,7 +586,7 @@ class CommandProcessor {
 CommandProcessor.loadBlockchainFromDisk('chain');
 if (!CommandProcessor.blockchain) CommandProcessor.blockchain = new BlockChain();
 
-function dataHandler(socketInfo) {
+function dataHandler(socketInfo, socket) {
 	let chainData = '';
 	return (data) => {
 		if (!data.toString().includes(':::END_MSG:::')) return chainData += data.toString();
@@ -599,12 +600,20 @@ function dataHandler(socketInfo) {
 			if (payload.me && !CommandProcessor.peerSockets[payload.me]) {
 				CommandProcessor.peerSockets[payload.me] = CommandProcessor.peerSockets[socketInfo];
 				delete CommandProcessor.peerSockets[socketInfo];
-			}
-			payload.hosts.filter(host => !CommandProcessor.peerSockets[host] && host !== `${localHostName()}:${server.address().port}`)
-					.forEach(host => CommandProcessor.processCommand(`/peer ${host}`));
+			}console.log('knownHosts:', payload);
+			payload.hosts.filter(filterHosts(`${myIp()}:${server.address().port}`, socket, true))
+					.forEach(host => {CommandProcessor.processCommand(`/peer ${host}`)});
 		} else
 			console.log(`${socketInfo}> ${inspect(payload, false, null, true)}`);
 	}
+}
+
+function isLocalHost(addr) {
+	addr = addr.split(':')[0];
+	const localAddrs = Object.values(os.networkInterfaces()).flat()
+			.filter(interface => interface.family === 'IPv4')
+			.map(interface => interface.address);
+	return localAddrs.includes[addr] || addr === 'localhost' || addr === os.hostname();
 }
 
 function localHostName() {
@@ -621,13 +630,34 @@ function errorHandler(socketInfo) {
 	}
 }
 
+function filterHosts(localHost, socket, create) {
+	return (remoteHost) => {
+		console.log(remoteHost);
+		const hostSocket = CommandProcessor.peerSockets[remoteHost];
+		if (hostSocket && !hostSocket.destroyed && create) return false;
+		console.log(remoteHost, 'socket exists and is healthy');
+		if (remoteHost === localHost) return false;
+		console.log(remoteHost, `is not ${localHost}`);
+		const remoteHostParts = remoteHost.split(':');
+		const localHostParts = localHost.split(':');
+		if (remoteHostParts[1] !== localHostParts[1]) return true;
+		console.log(remoteHost, 'ports match');
+		return !isLocalHost(remoteHostParts[0]);
+	}
+}
+
+function myIp() {
+	return Object.values(os.networkInterfaces()).flat()
+			.filter(interface => interface.netmask === '255.255.255.0' && interface.family === 'IPv4')[0].address;
+}
+
 const server = net.createServer(socket => {
 	let connectedHost = `${socket.remoteAddress.replace(/^.*:/, '')
-			.replace('127.0.0.1', 'localhost')}:${socket.remotePort}`;
+			.replace('127.0.0.1', myIp())}:${socket.remotePort}`;
 	console.log(`Socket connected to ${connectedHost} (server)`);
 	CommandProcessor.peerSockets[connectedHost] = socket;
 	let knownHosts = Object.keys(CommandProcessor.peerSockets)
-			.filter(socketItem => !socketItem.destroyed && socketItem !== socket && socketItem !== connectedHost);
+			.filter(filterHosts(connectedHost, socket, false));
 	socket.write(JSON.stringify({
 		'type': 'knownHosts',
 		'hosts': knownHosts
@@ -638,10 +668,11 @@ const server = net.createServer(socket => {
 		console.log(`${connectedHost} disconnected`);
 	});
 	socket.on('error', errorHandler(connectedHost));
-	socket.on('data', dataHandler(connectedHost));
+	socket.on('data', dataHandler(connectedHost, socket));
 });
-server.listen(() => {
+server.listen(0, myIp(), () => {
 	console.log('Listening for peers on:');
-	console.log(`localhost:${server.address().port}`);
+	console.log(`${myIp()}:${server.address().port}`);
+	console.log(server.address());
+	server.on('error', errorHandler(`${myIp()}:${server.address().port}`));
 });
-server.on('error', errorHandler(`localhost:${server.address().port}`));
