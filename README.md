@@ -78,3 +78,11 @@ The other terminal should now be able to read the messages you sent.
 `/read`
 
 When in doubt, broadcast the chain.  With the existing forking issue, the chains getting out of sync between peers will cause problems, and the peers will think you are broadcasting a stale chain when in fact you have different blocks not included in their chain.
+
+## TODO
+* Fix the forking issue
+* Automate broadcasting
+* Test with more than two peers
+    * Peer discovery/chain relay
+* Expose peers to web connections
+* Unknown unknowns
