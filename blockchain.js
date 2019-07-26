@@ -106,7 +106,7 @@ class Mailbox {
 					this.aliases[config.alias] = config;
 					console.log(`Alias updated for ${config.alias}: ${config.timestamp}`);
 				}
-			} else {
+			} else if (config) {
 				console.log(`Unknown config type: ${config.type}\n(${config})`);
 			}
 		});
@@ -448,46 +448,59 @@ class CommandProcessor {
 	}
 
 	static chainCommands(parsedCommand) {
-		if (!CommandProcessor.activeMailboxKey) {
-			console.log('No active mailbox');
-			return;
-		}
+		// if (!CommandProcessor.activeMailboxKey) {
+		// 	console.log('No active mailbox');
+		// 	return;
+		// }
 		if (!parsedCommand[1]) {
 			console.log('No chain command issued');
 			return;
 		}
-		if (![ 'dump', 'load' ].includes(parsedCommand[1])) {
+		if (![ 'dump', 'load', 'broadcast' ].includes(parsedCommand[1])) {
 			console.log(`Invalid chain command ${parsedCommand[1]}`);
 			return;
 		}
-		if (!parsedCommand[2]) {
+		if (!parsedCommand[2] && parsedCommand[1] !== 'broadcast') {
 			console.log(`No filename provided for chain ${parsedCommand[1]} command`);
 			return;
 		}
 		if (parsedCommand[1] === 'load') {
 			CommandProcessor.loadBlockchainFromDisk(parsedCommand[2]);
-				// CommandProcessor.mailboxes[CommandProcessor.activeMailboxKey].reloadBlockChain(fs.readFileSync(parsedCommand[2]));
 			return;
-		} else {
+		} else if (parsedCommand[1] === 'dump') {
 			fs.writeFileSync(parsedCommand[2], CommandProcessor.blockchain.toString());
 			console.log(`Dumped chain to ${parsedCommand[2]}`);
 			return;
+		} else {
+			console.log(CommandProcessor.blockchain.toString());
+			Object.values(CommandProcessor.peerSockets).forEach(socket => {
+				socket.write(JSON.stringify({
+					'type': 'blockchain',
+					'payload': CommandProcessor.blockchain.toString()
+				}));
+				socket.write(':::END_CHAIN:::');
+			});
 		}
 	}
 
 	static loadBlockchainFromDisk(file) {
 		if (fs.existsSync(file)) {
-			let bc = BlockChain.parse(fs.readFileSync(file), Mailbox.parse);
-			if (bc.isValid() && (!CommandProcessor.blockchain || bc.chain.length > CommandProcessor.blockchain.chain.length)) {
-				CommandProcessor.blockchain = bc;
-				console.log(`Blockchain loaded from ${file}`);
-				return;
-			} else {
-				console.log(`Blockchain from ${file} is invalid or stale`);
-				return;
-			}
+			CommandProcessor.updateBlockChain(fs.readFileSync(file));
 		} else {
 			console.log(`File ${file} does not exist`);
+			return;
+		}
+	}
+
+	static updateBlockChain(blockchainData) {
+		let bc = BlockChain.parse(blockchainData, Mailbox.parse);
+		if (bc.isValid() && (!CommandProcessor.blockchain || bc.chain.length > CommandProcessor.blockchain.chain.length)) {
+			CommandProcessor.blockchain = bc;
+			Object.values(CommandProcessor.mailboxes).forEach(mailbox => mailbox.blockchain = CommandProcessor.blockchain);
+			console.log(`Blockchain updated`);
+			return;
+		} else {
+			console.log(`Blockchain data is invalid or stale`);
 			return;
 		}
 	}
@@ -509,10 +522,8 @@ class CommandProcessor {
 		}
 		const socket = CommandProcessor.peerSockets[parsedCommand[1]] = net.connect(host[1], host[0], () => {
 			console.log(`Socket connected to ${parsedCommand[1]}`);
-			socket.on('data', data => {
-				let payload = JSON.parse(data);
-				console.log(`Rec'd data: ${payload}`);
-			});
+			socket.setNoDelay(true);
+			socket.on('data', dataHandler(parsedCommand[1]));
 			socket.on('error', e => {
 				console.log('socket:', e);
 			});
@@ -521,24 +532,38 @@ class CommandProcessor {
 }
 
 CommandProcessor.loadBlockchainFromDisk('chain');
+if (!CommandProcessor.blockchain) CommandProcessor.blockchain = new BlockChain();
+
+function dataHandler(socketInfo) {
+	let chainData = '';
+	return (data) => {
+		// console.log(data.toString());
+		if (!data.toString().includes(':::END_CHAIN:::')) return chainData += data.toString();
+		let last = data.toString();
+		chainData += last.substr(0, last.length-15);
+		console.log(chainData);
+		let payload = JSON.parse(chainData);
+		chainData = '';
+		console.log(`${socketInfo}> ${inspect(payload, false, null, true)}`);
+		if (payload.type === 'blockchain')
+			CommandProcessor.updateBlockChain(payload.payload);
+	}
+}
 
 const server = net.createServer(socket => {
-
-	console.log('client connected');
-	let connectedHost = `${socket.remoteAddress.replace(/^.*:/, '').replace('127.0.0.1', 'localhost')}:${socket.remotePort}`;
-	console.log(connectedHost);
+	let connectedHost = `${socket.remoteAddress.replace(/^.*:/, '')
+			.replace('127.0.0.1', 'localhost')}:${socket.remotePort}`;
+	console.log(`Socket connected to ${connectedHost}`);
 	CommandProcessor.peerSockets[connectedHost] = socket;
+	socket.setNoDelay(true);
 	socket.on('end', () => {
 		console.log('client disconnected');
 	});
 	socket.on('error', e => {
 		console.log('socket:', e);
 	})
-	socket.write('"connected"');
-	socket.on('data', data => {
-		let payload = JSON.parse(data);
-		console.log(`Rec'd data: ${payload}`);
-	})
+	socket.write('"connected":::END_CHAIN:::');
+	socket.on('data', dataHandler(connectedHost));
 });
 server.listen(() => {
 	console.log('listening...');

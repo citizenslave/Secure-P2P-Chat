@@ -4,6 +4,7 @@
   "description": "Secure P2P blockchain based chat application",
   "main": "blockchain.js",
   "scripts": {
+    "start": "node blockchain.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
