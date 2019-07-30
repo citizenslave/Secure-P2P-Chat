@@ -81,8 +81,10 @@ When in doubt, broadcast the chain.  I think I fixed the forking issue, but more
 
 ## TODO
 * Fix the forking issue - Fixed?
+    * Forking a longer chain
 * Automate broadcasting
 * Test with more than two peers - Done
     * Peer discovery/chain relay - Done?
 * Expose peers to web connections
+* Expiring chains/chain management
 * Unknown unknowns
